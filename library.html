@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JAYARAM's Resource Library</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen flex flex-col items-center p-4">
+
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, query, where, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // --- Firebase Configuration and Initialization ---
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+
+        let app, db, auth, userId;
+
+        window.firebase = {
+            init: async (initialAuthToken) => {
+                try {
+                    if (Object.keys(firebaseConfig).length === 0) {
+                        console.error("Firebase config is not set. The app will not be able to connect to Firestore.");
+                        return;
+                    }
+                    app = initializeApp(firebaseConfig);
+                    db = getFirestore(app);
+                    auth = getAuth(app);
+                    
+                    onAuthStateChanged(auth, async (user) => {
+                        if (user) {
+                            userId = user.uid;
+                            document.getElementById('loading-status').textContent = 'Loading...';
+                            window.dispatchEvent(new CustomEvent('auth-ready', { detail: { db, userId } }));
+                        } else {
+                            userId = null;
+                            try {
+                                if (initialAuthToken) {
+                                    await signInWithCustomToken(auth, initialAuthToken);
+                                } else {
+                                    await signInAnonymously(auth);
+                                }
+                            } catch (error) {
+                                console.error("Firebase Authentication Error:", error);
+                            }
+                        }
+                    });
+                } catch (error) {
+                    console.error("Firebase initialization failed:", error);
+                }
+            },
+            getDb: () => db,
+            getUserId: () => userId,
+            getAppId: () => appId // Added to expose appId to other modules
+        };
+    </script>
+    
+    <script type="module">
+        import { doc, setDoc, deleteDoc, collection, onSnapshot, addDoc, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global state for edit mode and form visibility
+        let isEditMode = false;
+        let isFormVisible = false;
+
+        // Function to toggle the form visibility
+        const toggleForm = () => {
+            isFormVisible = !isFormVisible;
+            const formContainer = document.getElementById('add-resource-form-container');
+            if (isFormVisible) {
+                formContainer.classList.remove('hidden');
+                document.getElementById('add-resource-btn').textContent = 'Cancel';
+            } else {
+                formContainer.classList.add('hidden');
+                document.getElementById('add-resource-btn').textContent = 'Add a Resource';
+                document.getElementById('resource-form').reset();
+            }
+        };
+        window.toggleForm = toggleForm;
+
+        // Function to toggle edit mode
+        const toggleEditMode = () => {
+            isEditMode = !isEditMode;
+            const editBtn = document.getElementById('edit-mode-btn');
+            const addBtn = document.getElementById('add-resource-btn');
+            const resourceCards = document.querySelectorAll('.resource-card');
+            
+            if (isEditMode) {
+                editBtn.textContent = 'Exit Edit Mode';
+                addBtn.disabled = true;
+                addBtn.classList.add('opacity-50', 'cursor-not-allowed');
+                resourceCards.forEach(card => card.classList.add('editing'));
+            } else {
+                editBtn.textContent = 'Enter Edit Mode';
+                addBtn.disabled = false;
+                addBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+                resourceCards.forEach(card => card.classList.remove('editing'));
+            }
+        };
+        window.toggleEditMode = toggleEditMode;
+
+        // Function to add or update a resource
+        const addResource = async (event) => {
+            event.preventDefault();
+            const form = event.target;
+            const title = form.title.value;
+            const url = form.url.value;
+            const type = form.type.value;
+            const description = form.description.value;
+            const resourceId = form.dataset.resourceId;
+            
+            const db = window.firebase.getDb();
+            if (!db) return;
+
+            const collectionPath = `artifacts/${window.firebase.getAppId()}/public/data/resources`;
+
+            try {
+                if (resourceId) {
+                    await setDoc(doc(db, collectionPath, resourceId), { title, url, type, description });
+                    console.log("Resource updated with ID: ", resourceId);
+                } else {
+                    await addDoc(collection(db, collectionPath), { title, url, type, description });
+                    console.log("Resource added!");
+                }
+                form.reset();
+                toggleForm();
+            } catch (e) {
+                console.error("Error adding/updating document: ", e);
+            }
+        };
+        window.addResource = addResource;
+
+        // Function to delete a resource
+        const deleteResource = async (resourceId) => {
+            if (!isEditMode) return;
+            const db = window.firebase.getDb();
+            if (!db) return;
+
+            const collectionPath = `artifacts/${window.firebase.getAppId()}/public/data/resources`;
+
+            try {
+                await deleteDoc(doc(db, collectionPath, resourceId));
+                console.log("Resource deleted!");
+            } catch (e) {
+                console.error("Error deleting document: ", e);
+            }
+        };
+        window.deleteResource = deleteResource;
+
+        // Function to open the edit form
+        const openEditForm = (resource) => {
+            if (!isEditMode) return;
+            const formContainer = document.getElementById('add-resource-form-container');
+            const form = document.getElementById('resource-form');
+            form.title.value = resource.title;
+            form.url.value = resource.url;
+            form.type.value = resource.type;
+            form.description.value = resource.description;
+            form.dataset.resourceId = resource.id;
+            
+            formContainer.classList.remove('hidden');
+            document.getElementById('add-resource-btn').textContent = 'Cancel';
+        };
+        window.openEditForm = openEditForm;
+
+        // Function to render resources
+        const renderResources = (resources) => {
+            const resourcesContainer = document.getElementById('resources-container');
+            resourcesContainer.innerHTML = '';
+            if (resources.length === 0) {
+                resourcesContainer.innerHTML = '<p class="text-center text-gray-500">No resources found. Add some!</p>';
+                return;
+            }
+            resources.forEach(resource => {
+                const card = document.createElement('div');
+                card.id = `resource-${resource.id}`;
+                card.className = `resource-card bg-white p-6 rounded-lg shadow-md transition-shadow hover:shadow-lg relative ${isEditMode ? 'editing' : ''}`;
+                card.innerHTML = `
+                    <h3 class="text-xl font-semibold text-indigo-600 mb-2">${resource.title}</h3>
+                    <p class="text-sm text-gray-500 mb-4">${resource.type}</p>
+                    <p class="text-gray-700 mb-4">${resource.description}</p>
+                    <a href="${resource.url}" target="_blank" class="text-indigo-500 hover:text-indigo-600 font-medium">Read More &rarr;</a>
+                    <div class="edit-overlay absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center space-x-2 rounded-lg opacity-0 transition-opacity pointer-events-none">
+                        <button onclick="openEditForm(${JSON.stringify(resource)})" class="bg-yellow-500 hover:bg-yellow-600 text-white p-2 rounded-full transform hover:scale-110 transition-transform">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                <path d="M13.586 3.586a2 2 0 112.828 2.828l-7.586 7.586A2 2 0 0110.172 14H8a2 2 0 01-2-2v-2.172a2 2 0 01.586-1.414l7.586-7.586z" />
+                                <path fill-rule="evenodd" d="M10.172 16.586L18 8.758V18a2 2 0 01-2 2H4a2 2 0 01-2-2V4a2 2 0 012-2h9.242l-7.828 7.828a2 2 0 00-.586 1.414v2.172a2 2 0 00.586 1.414l7.828 7.828zM18 10.172L10.172 18H18v-7.828z" clip-rule="evenodd" />
+                            </svg>
+                        </button>
+                        <button onclick="deleteResource('${resource.id}')" class="bg-red-500 hover:bg-red-600 text-white p-2 rounded-full transform hover:scale-110 transition-transform">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                <path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 009 2zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" />
+                            </svg>
+                        </button>
+                    </div>
+                `;
+                resourcesContainer.appendChild(card);
+            });
+        };
+
+        const predefinedResources = [
+            {
+                title: "The Road to React",
+                url: "https://www.roadtoreact.com/",
+                type: "Book",
+                description: "A comprehensive and pragmatic guide to modern React development. No magic involved.",
+            },
+            {
+                title: "Eloquent JavaScript",
+                url: "https://eloquentjavascript.net/",
+                type: "Book",
+                description: "A book about JavaScript, programming, and the wonders of the digital world.",
+            },
+            {
+                title: "CSS-Tricks",
+                url: "https://css-tricks.com/",
+                type: "Article",
+                description: "The most comprehensive resource for all things CSS, HTML, and front-end development.",
+            }
+        ];
+        
+        // Listen for Firebase auth readiness
+        window.addEventListener('auth-ready', async (e) => {
+            const db = e.detail.db;
+            const collectionPath = `artifacts/${window.firebase.getAppId()}/public/data/resources`;
+            
+            try {
+                // First, check if the collection is empty
+                const snapshot = await getDocs(collection(db, collectionPath));
+
+                // If it's empty, add the predefined resources
+                if (snapshot.empty) {
+                    console.log("Collection is empty, adding default resources.");
+                    const addPromises = predefinedResources.map(resource => addDoc(collection(db, collectionPath), resource));
+                    await Promise.all(addPromises);
+                }
+
+                // Set up the real-time listener after the initial check/load
+                onSnapshot(collection(db, collectionPath), (newSnapshot) => {
+                    const resources = newSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    document.getElementById('loading-status').textContent = '';
+                    renderResources(resources);
+                }, (error) => {
+                    console.error("Failed to get real-time updates: ", error);
+                    document.getElementById('loading-status').textContent = 'Error loading resources.';
+                });
+
+            } catch (error) {
+                console.error("Failed to initialize or fetch resources:", error);
+                document.getElementById('loading-status').textContent = 'Error loading resources.';
+            }
+        });
+        
+        // Initialize Firebase on window load
+        window.addEventListener('load', () => {
+             const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+            window.firebase.init(initialAuthToken);
+        });
+
+    </script>
+    
+    <!-- UI Layout -->
+    <div class="w-full max-w-4xl bg-white rounded-xl shadow-lg p-6 md:p-10 mb-8">
+        <header class="flex flex-col md:flex-row justify-between items-center mb-6 border-b pb-4">
+            <div class="flex items-center space-x-4 mb-4 md:mb-0">
+                <h1 class="text-4xl font-extrabold text-gray-900">JAYARAM's Library</h1>
+                <span id="loading-status" class="text-gray-500 font-medium italic">Loading...</span>
+            </div>
+            <div class="flex space-x-2">
+                <button id="add-resource-btn" onclick="toggleForm()" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-full shadow-lg transition-colors">
+                    Add a Resource
+                </button>
+                <button id="edit-mode-btn" onclick="toggleEditMode()" class="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded-full shadow-lg transition-colors">
+                    Enter Edit Mode
+                </button>
+            </div>
+        </header>
+
+        <!-- Form for adding a new resource -->
+        <div id="add-resource-form-container" class="hidden mb-8 p-6 bg-gray-50 rounded-lg shadow-inner">
+            <h2 class="text-2xl font-semibold mb-4 text-gray-800">Add a New Resource</h2>
+            <form id="resource-form" onsubmit="addResource(event)" class="space-y-4">
+                <div>
+                    <label for="title" class="block text-sm font-medium text-gray-700">Title</label>
+                    <input type="text" id="title" name="title" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+                </div>
+                <div>
+                    <label for="url" class="block text-sm font-medium text-gray-700">URL</label>
+                    <input type="url" id="url" name="url" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+                </div>
+                <div>
+                    <label for="type" class="block text-sm font-medium text-gray-700">Type</label>
+                    <input type="text" id="type" name="type" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500">
+                </div>
+                <div>
+                    <label for="description" class="block text-sm font-medium text-gray-700">Description</label>
+                    <textarea id="description" name="description" rows="3" required class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"></textarea>
+                </div>
+                <div class="flex space-x-2">
+                    <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-md shadow transition-colors">
+                        Save Resource
+                    </button>
+                </div>
+            </form>
+        </div>
+
+        <!-- Resources list -->
+        <div id="resources-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <!-- Resources will be dynamically added here -->
+        </div>
+    </div>
+    
+    <!-- Footer -->
+    <footer class="text-center text-gray-500 text-sm mt-auto pb-4">
+        <p>Powered by Firebase Firestore and Tailwind CSS</p>
+        <p>© 2024 JAYARAM. All rights reserved.</p>
+    </footer>
+
+</body>
+</html>
